@@ -18,25 +18,27 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
 
 int main(int argc, char **argv) {
-  int listenfd, connfd;
-  char hostname[MAXLINE], port[MAXLINE];
-  socklen_t clientlen;
-  struct sockaddr_storage clientaddr;
+  int listenfd, connfd; //리슨, 연결 디스크립터
+  char hostname[MAXLINE], port[MAXLINE]; //클라이언트 호스트네임, 포트
+  socklen_t clientlen; //clientaddr size
+  struct sockaddr_storage clientaddr; //clientaddr 
 
-  /* Check command line args */
+  // 인자가 하나일때만 실행해(포트번호)
   if (argc != 2) {
     fprintf(stderr, "usage: %s <port>\n", argv[0]);
     exit(1);
   }
-
+  
+  //받은 포트번호로 리슨디스크립터 생성!
   listenfd = Open_listenfd(argv[1]);
   while (1) {
+    // 리슨중인놈으로 부터 연결되면 커넥트디스크립터 생성!
     clientlen = sizeof(clientaddr);
-    connfd = Accept(listenfd, (SA *)&clientaddr,
-                    &clientlen);  // line:netp:tiny:accept
-    Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE,
-                0);
+    connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);  // line:netp:tiny:accept
+    // 연결된놈 정보 가져와서 출력해
+    Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
     printf("Accepted connection from (%s, %s)\n", hostname, port);
+    //doit함수 실행해!
     doit(connfd);   // line:netp:tiny:doit
     Close(connfd);  // line:netp:tiny:close
   }
@@ -60,29 +62,39 @@ void doit(int fd){
     clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
     return;
   }
+  //프로토콜 요청(예:GET) 다음에 오는 헤더 무시해주기(한줄 버퍼에서 빼주기!)
   read_requesthdrs(&rio);
   
+  // uri가지고 정적인지, 동적인지 판단 밑 filename, cgiargs 값 채우기
   is_static = parse_uri(uri, filename, cgiargs);
+  // 파일경로가 존재하지 않다면 에러발생
   if(stat(filename, &sbuf) < 0){
     clienterror(fd, filename, "404", "Not Found", "Tiny couldn't find this file");
     return;
   }
+  // 파일경로가 존재하고 정적 요청을 했다면
   if(is_static){
+    // 파일이 일반 파일이 아니거나(or) 파일이 읽기 권한이 없으면 에러발생
     if(!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
       return;
     }
+    //정적 컨텐츠 제공
     serve_static(fd, filename, sbuf.st_size);
   }
+  // 파일경로가 존재하고 동적 요청을 했다면
   else{
+    // 파일이 일반 파일이 아니거나(or) 파일이 실행 권한이 없으면 에러발생
     if(!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)){
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program");
       return;
     }
+    //동적 컨텐츠 제공
     serve_dynamic(fd, filename, cgiargs);
   }
 }
 
+//에러 출력 해주는 함수
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,char *longmsg){
   char buf[MAXLINE], body[MAXBUF];
 
@@ -101,6 +113,7 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg,char *longmsg
   Rio_writen(fd, body, strlen(body));
 }
 
+//HTTP 요청 형식에 맞게 헤더부분을 다 읽고 무시해준다.
 void read_requesthdrs(rio_t *rp){
   char buf[MAXLINE];
 
@@ -115,19 +128,24 @@ void read_requesthdrs(rio_t *rp){
 int parse_uri(char *uri, char *filename, char *cgiargs){
   char *ptr;
 
+  // uri스트링 안에 cgi-bin이라는 서브 스트링이 있다면 그 포인터를 반환함.
   if(!strstr(uri, "cgi-bin")){
-    strcpy(cgiargs, "");
+    // cgi-bin이라는 서브 스트링이 없다면, 정적 콘텐츠를 요청한 것이므로
+    strcpy(cgiargs, "");// cgiargs는 비워줌
     strcpy(filename, ".");
-    strcat(filename, uri);
+    strcat(filename, uri);//filename은 .[uri] 형식이됨
+    // 추가적으로 uri의 마지막이/라면 디렉토리에 있는 home.html파일을 호출하도록 추가해줌
     if(uri[strlen(uri)-1] == '/')
       strcat(filename, "home.html");
     return 1;
   }
   else{
-    ptr = index(uri, '?');
+    // cgi-bin이라는 서브스트링이 있다면
+    ptr = index(uri, '?'); // ?를 찾아서 포인터 반환
     if(ptr){
-      strcpy(cgiargs, ptr+1);
-      *ptr = '\0';
+      // ?포인터가 있다면
+      strcpy(cgiargs, ptr+1); // cgiargs에다가 포인터+1부터 널 포인터 만날때까지 복사
+      *ptr = '\0'; //그다음 ?위치를 널포인터로 만들어 문자열을 끊어줌
     }
     else
       strcpy(cgiargs, "");
@@ -141,6 +159,7 @@ void serve_static(int fd, char *filename, int filesize){
   int srcfd;
   char *srcp, filetype[MAXLINE], buf[MAXBUF];
 
+  //filename에 서브 스트링 확장자 보고 파일타입 반환
   get_filetype(filename, filetype);
   sprintf(buf, "HTTP/1.0 200 OK\r\n");
   sprintf(buf, "%sServer: Tiny Web Server\r\n", buf);
@@ -151,10 +170,14 @@ void serve_static(int fd, char *filename, int filesize){
   printf("Response headers:\n");
   printf("%s", buf);
 
+  //읽기 파일로 파일 열기
   srcfd = Open(filename, O_RDONLY, 0);
+  // srcp로 파일을 매핑시작.(읽기 가능, 쓰기 불가능)
   srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
   Close(srcfd);
+  //정적 콘텐츠 전송
   Rio_writen(fd, srcp, filesize);
+  // 매핑된 영역 해제
   Munmap(srcp, filesize);
 }
 
@@ -179,10 +202,12 @@ void serve_dynamic(int fd, char *filename, char *cgiargs){
   sprintf(buf, "Server: Tiny Web Server\r\n");
   Rio_writen(fd, buf, strlen(buf));
 
+  // 자식 프로세스 생성
   if(Fork() == 0){
-    setenv("QUERY_STRING", cgiargs, 1);
-    Dup2(fd, STDOUT_FILENO);
-    Execve(filename, emptylist, environ);
+    //자식 프로세스에서만 실행됨
+    setenv("QUERY_STRING", cgiargs, 1); // 환경 변수 설정함.
+    Dup2(fd, STDOUT_FILENO); // fd를 표준 출력으로 리디렉션함. printf하는거 다 fd로 전송됨?
+    Execve(filename, emptylist, environ); // filename으로 지정된 cgi 프로그램 실행, 자식 프로세스 cgi 프로그램으로 교체됨
   }
   Wait(NULL);
 }
