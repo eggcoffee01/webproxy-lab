@@ -58,7 +58,7 @@ void doit(int fd){
   // buf to 3 args
   sscanf(buf, "%s %s %s", method, uri, version);
   //GET 메소드가 아니라면 반환
-  if(strcasecmp(method, "GET")){
+  if(strcasecmp(method, "GET") && strcasecmp(method, "HEAD")){
     clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
     return;
   }
@@ -73,6 +73,17 @@ void doit(int fd){
     return;
   }
   // 파일경로가 존재하고 정적 요청을 했다면
+  if(!strcasecmp(method, "HEAD")){
+    if(!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {
+      clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
+      return;
+    }
+    //정적 컨텐츠 제공
+    serve_header(fd, filename, sbuf.st_size);
+    return;
+  }
+
+
   if(is_static){
     // 파일이 일반 파일이 아니거나(or) 파일이 읽기 권한이 없으면 에러발생
     if(!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {
@@ -155,6 +166,22 @@ int parse_uri(char *uri, char *filename, char *cgiargs){
   }
 }
 
+void serve_header(int fd, char *filename, int filesize){
+  int srcfd;
+  char *srcp, filetype[MAXLINE], buf[MAXBUF];
+
+  //filename에 서브 스트링 확장자 보고 파일타입 반환
+  get_filetype(filename, filetype);
+  sprintf(buf, "HTTP/1.0 200 OK\r\n");
+  sprintf(buf, "%sServer: Tiny Web Server\r\n", buf);
+  sprintf(buf, "%sConnection: close\r\n", buf);
+  sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
+  sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
+  Rio_writen(fd, buf, strlen(buf));
+  printf("Response headers:\n");
+  printf("%s", buf);
+}
+
 void serve_static(int fd, char *filename, int filesize){
   int srcfd;
   char *srcp, filetype[MAXLINE], buf[MAXBUF];
@@ -173,12 +200,15 @@ void serve_static(int fd, char *filename, int filesize){
   //읽기 파일로 파일 열기
   srcfd = Open(filename, O_RDONLY, 0);
   // srcp로 파일을 매핑시작.(읽기 가능, 쓰기 불가능)
-  srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+  // srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+  srcp = Malloc(filesize);
+  Rio_readn(srcfd, srcp, filesize);
   Close(srcfd);
   //정적 콘텐츠 전송
   Rio_writen(fd, srcp, filesize);
   // 매핑된 영역 해제
-  Munmap(srcp, filesize);
+  // Munmap(srcp, filesize);
+  free(srcp);
 }
 
 void get_filetype(char *filename, char *filetype){
@@ -190,6 +220,8 @@ void get_filetype(char *filename, char *filetype){
     strcpy(filetype, "image/png");
   else if(strstr(filename, ".jpg"))
     strcpy(filetype, "image/jpeg");
+  else if(strstr(filename, ".mp4"))
+    strcpy(filetype, "video/mp4");
   else
     strcpy(filetype, "text/plain");
 }
