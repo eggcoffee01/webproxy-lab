@@ -192,6 +192,7 @@ void write_cache(cache_block *block) {
     if (total_cache_size > MAX_CACHE_SIZE) {
         total_cache_size -= tail_ptr->data_length;
         tail_ptr = tail_ptr->prev;
+        free(tail_ptr->next->response_data);
         free(tail_ptr->next);
         tail_ptr->next = NULL;
     }
